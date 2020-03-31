@@ -15,22 +15,12 @@
  */
 package org.gexuy.cnc.tunnel;
 
-import java.awt.BorderLayout;
-import java.awt.Dimension;
-import java.awt.Font;
+import javax.swing.*;
+import javax.swing.border.EmptyBorder;
+import java.awt.*;
 import java.awt.event.WindowEvent;
 import java.awt.event.WindowListener;
 import java.util.Objects;
-import javax.swing.BorderFactory;
-import javax.swing.BoxLayout;
-import javax.swing.ImageIcon;
-import javax.swing.JFrame;
-import javax.swing.JLabel;
-import javax.swing.JPanel;
-import javax.swing.JScrollPane;
-import javax.swing.JTextArea;
-import javax.swing.SwingUtilities;
-import javax.swing.border.EmptyBorder;
 
 /**
  *
@@ -79,13 +69,11 @@ public class StatusWindow extends JFrame implements WindowListener {
     }
 
     public void log(final String str) {
-        SwingUtilities.invokeLater(new Runnable() {
-            public void run() {
-                if (logArea.getText().length() == 0) {
-                    logArea.append(str);
-                } else {
-                    logArea.append("\n" + str);
-                }
+        SwingUtilities.invokeLater(() -> {
+            if (logArea.getText().length() == 0) {
+                logArea.append(str);
+            } else {
+                logArea.append("\n" + str);
             }
         });
     }
@@ -94,11 +82,9 @@ public class StatusWindow extends JFrame implements WindowListener {
 
         final JFrame window = this;
 
-        SwingUtilities.invokeLater(new Runnable() {
-            public void run() {
-                statusLabel.setText(str);
-                window.setTitle("CnCNet Tunnel - " + str);
-            }
+        SwingUtilities.invokeLater(() -> {
+            statusLabel.setText(str);
+            window.setTitle("CnCNet Tunnel - " + str);
         });
     }
 

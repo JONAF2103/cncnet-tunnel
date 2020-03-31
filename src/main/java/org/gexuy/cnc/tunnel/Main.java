@@ -16,6 +16,8 @@
 package org.gexuy.cnc.tunnel;
 
 import com.sun.net.httpserver.HttpServer;
+
+import javax.swing.*;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -25,10 +27,8 @@ import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
-import java.util.Date;
-import java.util.Iterator;
-import javax.swing.JFrame;
-import javax.swing.UIManager;
+import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  *
@@ -36,6 +36,7 @@ import javax.swing.UIManager;
  */
 public class Main {
 
+    static Queue<String> lastLogLines = new ArrayDeque<>(20);
     static FileOutputStream logStream = null;
     static StatusWindow statusWindow = null;
     static TunnelController controller = null;
@@ -62,6 +63,7 @@ public class Main {
     protected static int iplimit = 2;
     protected static String logfile = null;
     protected static String maintpw = null;
+    protected static boolean running = true;
 
     public static void main(String[] args) {
 
@@ -99,7 +101,7 @@ public class Main {
         if (!headless) {
             try {
                 UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-            } catch (Exception e) { }
+            } catch (Exception ignore) {}
 
             ConfigurationWindow configurationWindow = new ConfigurationWindow();
             configurationWindow.setVisible(true);
@@ -163,6 +165,9 @@ public class Main {
             HttpServer server = HttpServer.create(new InetSocketAddress(port), 4);
             server.createContext("/request", controller);
             server.createContext("/status", controller);
+            server.createContext("/server-status", controller);
+            server.createContext("/configuration", controller);
+            server.createContext("/login", controller);
             if (maintpw != null) {
                 server.createContext("/maintenance/" + maintpw, controller);
             }
@@ -173,7 +178,7 @@ public class Main {
 
             ByteBuffer buf = ByteBuffer.allocate(4096);
 
-            while (true) {
+            while (running) {
                 if (selector.select() > 0) {
 
                     long now = System.currentTimeMillis();
@@ -251,10 +256,10 @@ public class Main {
                 out += "\n";
                 try {
                     logStream.write(out.getBytes());
-                } catch (IOException e) {
-
-                }
+                } catch (IOException ignore) {}
             }
+
+            lastLogLines.add(out);
         }
     }
 
@@ -262,5 +267,12 @@ public class Main {
         if (statusWindow != null) {
             statusWindow.status(s);
         }
+    }
+
+    public static List<String> getLastLogLines() {
+        if (lastLogLines == null) {
+            return new ArrayList<>();
+        }
+        return new ArrayList<>(lastLogLines);
     }
 }

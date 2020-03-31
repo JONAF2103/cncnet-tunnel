@@ -15,8 +15,7 @@
  */
 package org.gexuy.cnc.tunnel;
 
-import javax.swing.ImageIcon;
-import javax.swing.JSpinner;
+import javax.swing.*;
 import java.util.Objects;
 
 /**

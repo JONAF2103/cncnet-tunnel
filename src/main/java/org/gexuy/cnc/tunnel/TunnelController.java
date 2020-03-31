@@ -15,24 +15,18 @@
  */
 package org.gexuy.cnc.tunnel;
 
+import com.google.gson.Gson;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.OutputStream;
+import org.apache.commons.io.IOUtils;
+
+import java.io.*;
 import java.net.HttpURLConnection;
-import java.net.InetAddress;
-import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Queue;
-import java.util.Set;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
@@ -42,7 +36,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  */
 public class TunnelController implements HttpHandler, Runnable {
 
-    private class Lock {
+    private static class Lock {
         public long firstRequest;
         public int games;
 
@@ -55,34 +49,38 @@ public class TunnelController implements HttpHandler, Runnable {
         }
     }
 
-    private Map<Short, Client> clients;
+    private final Map<Short, Client> clients;
 
     private String name;
     private String password;
-    private int maxclients;
+    private int maxClients;
     private int port;
     private String master;
-    private String masterpw = null;
-    private int iplimit;
+    private String masterPW;
+    private int ipLimit;
+    private volatile boolean tunnelEnabled = true;
+    private volatile boolean rebootTunnelEnabled = true;
     private Queue<Short> pool;
     private volatile boolean maintenance = false;
     final private ConcurrentHashMap<String, Lock> locks;
+    private String adminUsername = "admin";
+    private Gson gson = new Gson();
 
-    public TunnelController(String name, String password, int port, int maxclients, String master, String masterpw, int iplimit) {
-        clients = new ConcurrentHashMap<Short, Client>();
+    public TunnelController(String name, String password, int port, int maxClients, String master, String masterPW, int ipLimit) {
+        clients = new ConcurrentHashMap<>();
 
         this.name = name;
         this.password = password;
-        this.maxclients = maxclients;
+        this.maxClients = maxClients;
         this.port = port;
         this.master = master;
-        this.masterpw = masterpw;
-        this.iplimit = iplimit;
-        this.pool = new ConcurrentLinkedQueue<Short>();
-        this.locks = new ConcurrentHashMap<String, Lock>();
+        this.masterPW = masterPW;
+        this.ipLimit = ipLimit;
+        this.pool = new ConcurrentLinkedQueue<>();
+        this.locks = new ConcurrentHashMap<>();
 
         long start = System.currentTimeMillis();
-        ArrayList<Short> allShort = new ArrayList<Short>();
+        ArrayList<Short> allShort = new ArrayList<>();
         for (short i = Short.MIN_VALUE; i < Short.MAX_VALUE; i++) {
             allShort.add(i);
         }
@@ -98,7 +96,6 @@ public class TunnelController implements HttpHandler, Runnable {
 
     private void handleRequest(HttpExchange t) throws IOException {
         String params = t.getRequestURI().getQuery();
-        List<InetAddress> addresses = new ArrayList<InetAddress>();
         String requestAddress = t.getRemoteAddress().getAddress().getHostAddress();
         int requestedAmount = 0;
         boolean pwOk = (password == null);
@@ -107,8 +104,8 @@ public class TunnelController implements HttpHandler, Runnable {
             params = "";
 
         String[] pairs = params.split("&");
-        for (int i = 0; i < pairs.length; i++) {
-            String kv[] = pairs[i].split("=");
+        for (String pair : pairs) {
+            String[] kv = pair.split("=");
             if (kv.length != 2)
                 continue;
 
@@ -150,9 +147,9 @@ public class TunnelController implements HttpHandler, Runnable {
 
         Lock curLock = locks.get(requestAddress);
         // lock the request ip out until this router is collected
-        if (iplimit > 0 && curLock != null && curLock.games >= iplimit) {
+        if (ipLimit > 0 && curLock != null && curLock.games >= ipLimit) {
             // Too Many Requests
-            Main.log("Same address tried to request more than " + iplimit + " routers.");
+            Main.log("Same address tried to request more than " + ipLimit + " routers.");
             t.sendResponseHeaders(429, 0);
             t.getResponseBody().close();
             return;
@@ -161,7 +158,7 @@ public class TunnelController implements HttpHandler, Runnable {
         StringBuilder ret = new StringBuilder();
 
         synchronized (clients) {
-            if (requestedAmount + clients.size() > maxclients) {
+            if (requestedAmount + clients.size() > maxClients) {
                 // Service Unavailable
                 Main.log("Request wanted more than we could provide.");
                 t.sendResponseHeaders(503, 0);
@@ -173,7 +170,7 @@ public class TunnelController implements HttpHandler, Runnable {
 
             // for thread safety, we just try to reserve slots (actually we are
             // double synchronized right now, makes little sense)
-            ArrayList<Short> reserved = new ArrayList<Short>();
+            ArrayList<Short> reserved = new ArrayList<>();
             for (int i = 0; i < requestedAmount; i++) {
                 Short clientId = pool.poll();
                 if (clientId != null) {
@@ -195,9 +192,7 @@ public class TunnelController implements HttpHandler, Runnable {
                 }
             } else {
                 // return our reservations if any
-                for (Short clientId : reserved) {
-                    pool.add(clientId);
-                }
+                pool.addAll(reserved);
                 // Service Unavailable
                 Main.log("Request wanted more than we could provide and we also exhausted our queue.");
                 t.sendResponseHeaders(503, 0);
@@ -207,7 +202,7 @@ public class TunnelController implements HttpHandler, Runnable {
             ret.append("]");
         }
 
-        if (iplimit > 0) {
+        if (ipLimit > 0) {
             synchronized (locks) {
                 long now = System.currentTimeMillis();
                 Lock l = locks.get(requestAddress);
@@ -226,12 +221,29 @@ public class TunnelController implements HttpHandler, Runnable {
         os.close();
     }
 
-    private void handleStatus(HttpExchange t) throws IOException {
-        String response = (maxclients - clients.size()) + " slots free.\n" + clients.size() + " slots in use.\n";
-        Main.log("Response: " + response);
-        t.sendResponseHeaders(200, response.length());
+    private void handleStatus(HttpExchange t, boolean json) throws IOException {
+        if (json) {
+            StatusResponse statusResponse = new StatusResponse();
+            statusResponse.setSlotsFree((maxClients - clients.size()));
+            statusResponse.setSlotsInUse(clients.size());
+            statusResponse.setServerLog(Main.getLastLogLines());
+            respondJson(t, gson.toJson(statusResponse));
+        } else {
+            String response = (maxClients - clients.size()) + " slots free.\n" + clients.size() + " slots in use.\n";
+            Main.log("Response: " + response);
+            t.sendResponseHeaders(200, response.length());
+            OutputStream os = t.getResponseBody();
+            os.write(response.getBytes());
+            os.close();
+        }
+    }
+
+    private void respondJson(HttpExchange t, String jsonString) throws IOException {
+        Main.log("Response: " + jsonString);
+        t.sendResponseHeaders(200, jsonString.length());
+        t.getResponseHeaders().set("Content-Type", "application/json");
         OutputStream os = t.getResponseBody();
-        os.write(response.getBytes());
+        os.write(jsonString.getBytes());
         os.close();
     }
 
@@ -239,6 +251,62 @@ public class TunnelController implements HttpHandler, Runnable {
         setMaintenance();
         t.sendResponseHeaders(200, 0);
         t.getResponseBody().close();
+    }
+
+    private void handleConfiguration(HttpExchange t) throws IOException {
+        if (t.getRequestHeaders().containsKey("Content-Type") &&
+                "application/json".equals(t.getRequestHeaders().getFirst("Content-Type"))) {
+            ConfigurationResponse configurationResponse = new ConfigurationResponse();
+            configurationResponse.setName(name);
+            configurationResponse.setAdminUsername(adminUsername);
+            configurationResponse.setMaxClients(maxClients);
+            configurationResponse.setPassword(password);
+            configurationResponse.setPort(port);
+            configurationResponse.setTunnelEnabled(tunnelEnabled);
+            respondJson(t, gson.toJson(configurationResponse));
+        } else if (t.getRequestMethod().equals("GET")) {
+            respondWithPage("configuration.html", t);
+        } else if (t.getRequestMethod().equals("POST")) {
+            InputStream is = t.getRequestBody();
+            Reader reader = new InputStreamReader(is, StandardCharsets.UTF_8);
+            ConfigurationRequest configurationRequest = gson.fromJson(reader, ConfigurationRequest.class);
+            if (configurationRequest.isTunnelEnabled()) {
+                this.tunnelEnabled = false;
+                Main.log("Updating Config: " + configurationRequest.toString());
+                this.name = configurationRequest.getName();
+                this.maxClients = configurationRequest.getMaxClients();
+                this.port = configurationRequest.getPort();
+                this.password = configurationRequest.getPassword();
+                this.adminUsername = configurationRequest.getAdminUsername();
+                Main.log("Config Updated: need to enable tunnel again to get the new config working");
+            } else {
+                Main.log("Tunnel Disabled, waiting for new configuration");
+                this.tunnelEnabled = false;
+            }
+        } else {
+            t.sendResponseHeaders(400, 0);
+        }
+    }
+
+    private void respondWithPage(String pageName, HttpExchange t) throws IOException {
+        String response = IOUtils.resourceToString("pages/" + pageName, StandardCharsets.UTF_8, TunnelController.class.getClassLoader());
+        Main.log("Response: " + response);
+        t.sendResponseHeaders(200, response.length());
+        OutputStream os = t.getResponseBody();
+        os.write(response.getBytes());
+        os.close();
+    }
+
+    private void handleLogin(HttpExchange t) throws IOException {
+        InputStream is = t.getRequestBody();
+        Reader reader = new InputStreamReader(is, StandardCharsets.UTF_8);
+        LoginRequest loginRequest  = gson.fromJson(reader, LoginRequest.class);
+        if (adminUsername.equals(loginRequest.getUsername()) &&
+                password.equals(new String(Base64.getDecoder().decode(loginRequest.getPassword()), StandardCharsets.UTF_8))) {
+            respondWithPage("configuration-logged.html", t);
+        } else {
+            respondWithPage("login-error.html", t);
+        }
     }
 
     public void setMaintenance() {
@@ -253,8 +321,8 @@ public class TunnelController implements HttpHandler, Runnable {
                     + "&password=" + (password == null ? "0" : "1")
                     + "&port=" + port
                     + "&clients=" + clients.size()
-                    + "&maxclients=" + maxclients
-                    + (masterpw != null ? "&masterpw=" + URLEncoder.encode(masterpw, "US-ASCII") : "")
+                    + "&maxclients=" + maxClients
+                    + (masterPW != null ? "&masterpw=" + URLEncoder.encode(masterPW, "US-ASCII") : "")
                     + "&maintenance=1"
                 );
                 HttpURLConnection con = (HttpURLConnection)url.openConnection();
@@ -267,8 +335,6 @@ public class TunnelController implements HttpHandler, Runnable {
                 Main.log("Master notified of maintenance.\n");
             } catch (FileNotFoundException e) {
                 Main.log("Master server reported error 404.");
-            } catch (MalformedURLException e) {
-                Main.log("Failed to send heartbeat: " + e.toString());
             } catch (IOException e) {
                 Main.log("Failed to send heartbeat: " + e.toString());
             }
@@ -278,17 +344,21 @@ public class TunnelController implements HttpHandler, Runnable {
     @Override
     public void handle(HttpExchange t) throws IOException {
         String uri = t.getRequestURI().toString();
-        t.getRequestBody().close();
-
         Main.log("HTTPRequest: " + uri);
 
         try {
             if (uri.startsWith("/request")) {
                 handleRequest(t);
             } else if (uri.startsWith("/status")) {
-                handleStatus(t);
+                handleStatus(t, false);
+            } else if (uri.startsWith("/server-status")) {
+                handleStatus(t, true);
             } else if (uri.startsWith("/maintenance/")) {
                 handleMaintenance(t);
+            } else if (uri.startsWith("/configuration")){
+                handleConfiguration(t);
+            } else if (uri.startsWith("/login")){
+                handleLogin(t);
             } else {
                 t.sendResponseHeaders(400, 0);
             }
@@ -304,7 +374,20 @@ public class TunnelController implements HttpHandler, Runnable {
 
     @Override
     public void run() {
+        while (rebootTunnelEnabled) {
+            if (tunnelEnabled) {
+                this.runTunnel();
+            } else {
+                try {
+                    Thread.sleep(5000);
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+        }
+    }
 
+    private void runTunnel() {
         long lastHeartbeat = 0;
 
         Main.status("Connecting...");
@@ -313,7 +396,7 @@ public class TunnelController implements HttpHandler, Runnable {
 
         boolean connected = false;
 
-        while (true) {
+        while (tunnelEnabled) {
 
             long now = System.currentTimeMillis();
 
@@ -323,38 +406,36 @@ public class TunnelController implements HttpHandler, Runnable {
                 return;
             }
 
-            if (lastHeartbeat + 60000 < now && master != null && !maintenance) {
-                Main.log("Sending a heartbeat to master server.");
-
-                connected = false;
-                try {
-                    URL url = new URL(
-                        master + "?version=2"
-                        + "&name=" + URLEncoder.encode(name, "US-ASCII")
-                        + "&password=" + (password == null ? "0" : "1")
-                        + "&port=" + port
-                        + "&clients=" + clients.size()
-                        + "&maxclients=" + maxclients
-                        + (masterpw != null ? "&masterpw=" + URLEncoder.encode(masterpw, "US-ASCII") : "")
-                    );
-                    HttpURLConnection con = (HttpURLConnection)url.openConnection();
-                    con.setRequestMethod("GET");
-                    con.setConnectTimeout(5000);
-                    con.setReadTimeout(5000);
-                    con.connect();
-                    con.getInputStream().close();
-                    con.disconnect();
-                    connected = true;
-                } catch (FileNotFoundException e) {
-                    Main.log("Master server reported error 404.");
-                } catch (MalformedURLException e) {
-                    Main.log("Failed to send heartbeat: " + e.toString());
-                } catch (IOException e) {
-                    Main.log("Failed to send heartbeat: " + e.toString());
-                }
-
-                lastHeartbeat = now;
-            }
+//            if (lastHeartbeat + 60000 < now && master != null && !maintenance) {
+//                Main.log("Sending a heartbeat to master server.");
+//
+//                connected = false;
+//                try {
+//                    URL url = new URL(
+//                            master + "?version=2"
+//                                    + "&name=" + URLEncoder.encode(name, "US-ASCII")
+//                                    + "&password=" + (password == null ? "0" : "1")
+//                                    + "&port=" + port
+//                                    + "&clients=" + clients.size()
+//                                    + "&maxclients=" + maxClients
+//                                    + (masterPW != null ? "&masterpw=" + URLEncoder.encode(masterPW, "US-ASCII") : "")
+//                    );
+//                    HttpURLConnection con = (HttpURLConnection)url.openConnection();
+//                    con.setRequestMethod("GET");
+//                    con.setConnectTimeout(5000);
+//                    con.setReadTimeout(5000);
+//                    con.connect();
+//                    con.getInputStream().close();
+//                    con.disconnect();
+//                    connected = true;
+//                } catch (FileNotFoundException e) {
+//                    Main.log("Master server reported error 404.");
+//                } catch (IOException e) {
+//                    Main.log("Failed to send heartbeat: " + e.toString());
+//                }
+//
+//                lastHeartbeat = now;
+//            }
 
             Set<Map.Entry<Short, Client>> set = clients.entrySet();
 
@@ -383,8 +464,8 @@ public class TunnelController implements HttpHandler, Runnable {
             }
 
             Main.status(
-                (connected ? "Connected. " : "Disconnected from master. ") +
-                clients.size() + " / " + maxclients + " players online."
+                    (connected ? "Connected. " : "Disconnected from master. ") +
+                            clients.size() + " / " + maxClients + " players online."
             );
 
             try {
