@@ -1,0 +1,105 @@
+/* You can add global styles to this file, and also import other style files */
+@import url(https://fonts.googleapis.com/css?family=Roboto:300);
+
+.section {
+  background: rgba(93, 96, 101, 0.7);
+  flex-flow: column;
+  padding: 5%;
+}
+.login-section {
+  width: 400px;
+  padding: 10%;
+}
+span {
+  display: flex;
+  input {
+    width: auto;
+    margin-left: 10pt;
+  }
+}
+
+input {
+    font-weight: bold;
+    outline: 0;
+    width: 100%;
+    border: 0;
+    margin: 0 0 15px;
+    padding: 15px;
+    box-sizing: border-box;
+    font-size: 14px;
+    background: black;
+    color: #FFF652;
+}
+input:focus {
+  border: solid 1px #FFF652;
+}
+button {
+  outline: 0;
+  background: rgb(193,1,0);
+  background: radial-gradient(#c10100 0%, #c10100 40%, #000000 100%);
+  border: none;
+  border-radius: 2em;
+  width: 100%;
+  padding: 15px;
+  color: #FFF652;
+  font-weight: bold;
+  font-size: 14px;
+  -webkit-transition: all 0.3 ease;
+  transition: all 0.3 ease;
+  cursor: pointer;
+}
+button:hover, button:active, button:focus {
+  background: radial-gradient(#c10100 0%, #c10100 40%, #000000 70%);
+}
+
+textarea {
+  width: 100%;
+  height: 300px;
+  resize: none;
+  background: black;
+  color: #FFF652;
+}
+.label {
+  text-align: left;
+  font-weight: bolder;
+  text-transform: uppercase;
+  font-size: 9pt;
+}
+span {
+  color: #FFF652;
+}
+.server-log {
+  display: flex;
+  justify-content: center;
+  flex-flow: column;
+  color: #FFF652;
+  margin-top: 10%;
+}
+html, body, app-root {
+  padding: 0;
+  margin: 0;
+  height: 100%;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+body {
+  background: url("/assets/background.jpg") center center;
+  background-size: 100% 100%;
+  font-family: "Roboto", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.container {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  justify-content: center;
+  app-home {
+    height: 100%;
+  }
+}
+

@@ -1,0 +1,8 @@
+#!/bin/bash
+
+ng build --prod
+gulp
+
+cp dist/ui.html ../src/main/resources
+
+echo "Done!"

@@ -10,7 +10,7 @@ Parameters:
 
  1. -name <str>          Custom name for the tunnel
  2. -maxclients <num>    Maximum number of ports to allocate
- 3. -password <num>      Usage password
+ 3. -password <num>      Usage password (it's not supported yet)
  4. -port <num>          The port games are routed at
  5. -masterpw <str>      Optional password to send to master when registering
  6. -nomaster            Don't register to master

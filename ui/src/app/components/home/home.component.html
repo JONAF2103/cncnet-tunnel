@@ -1,0 +1,16 @@
+<div *ngIf="!loading" class="section">
+  <input type="text" placeholder="Server Name" [(ngModel)]="configuration.serverName" [ngModelOptions]="{standalone: true}"/>
+  <input type="password" placeholder="Server Password (Not supported yet)" [(ngModel)]="configuration.serverPassword" [ngModelOptions]="{standalone: true}"/>
+  <input type="text" placeholder="Admin Username" [(ngModel)]="configuration.adminUsername" [ngModelOptions]="{standalone: true}"/>
+  <input type="password" placeholder="Admin Password" [(ngModel)]="configuration.adminPassword" [ngModelOptions]="{standalone: true}"/>
+  <input type="number" [max]="65535" [min]="1024" placeholder="Server Port" [(ngModel)]="configuration.port" [ngModelOptions]="{standalone: true}"/>
+  <input type="number" [max]="1000" [min]="1" placeholder="Max Clients" [(ngModel)]="configuration.maxClients" [ngModelOptions]="{standalone: true}"/>
+  <span>Enabled <input type="checkbox" [(ngModel)]="configuration.tunnelEnabled" [ngModelOptions]="{standalone: true}"/></span>
+  <button (click)="updateConfiguration()">Update Configuration</button>
+  <div *ngIf="status" class="server-log">
+    <div class="label">Slots Free:&nbsp;{{status.slotsFree}}</div>
+    <div class="label">Slots In Use:&nbsp;{{status.slotsFree}}</div>
+    <div class="label">Server Log:</div>
+    <textarea [value]="status.serverLog"></textarea>
+  </div>
+</div>

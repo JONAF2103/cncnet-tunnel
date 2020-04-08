@@ -2,12 +2,12 @@ package org.gexuy.cnc.tunnel;
 
 import java.util.List;
 
-public class StatusResponse {
+public class Status {
     private int slotsFree;
     private int slotsInUse;
     private List<String> serverLog;
 
-    public StatusResponse() {}
+    public Status() {}
 
     public int getSlotsFree() {
         return slotsFree;
@@ -35,9 +35,10 @@ public class StatusResponse {
 
     @Override
     public String toString() {
-        return "Status: " +
-                "Slots Free = " + this.slotsFree + "\n" +
-                "Slots In Use = " + this.slotsInUse + "\n" +
-                "Server Log = " + this.serverLog;
+        return "StatusResponse{" +
+                "slotsFree=" + slotsFree +
+                ", slotsInUse=" + slotsInUse +
+                ", serverLog=" + serverLog +
+                '}';
     }
 }

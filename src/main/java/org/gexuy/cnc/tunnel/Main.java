@@ -16,8 +16,11 @@
 package org.gexuy.cnc.tunnel;
 
 import com.sun.net.httpserver.HttpServer;
+import org.apache.commons.io.FileUtils;
 
 import javax.swing.*;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -27,7 +30,9 @@ import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
 /**
@@ -36,10 +41,17 @@ import java.util.stream.Collectors;
  */
 public class Main {
 
-    static Queue<String> lastLogLines = new ArrayDeque<>(20);
+    static final int MAX_LOG_LINES_TO_SHOW = 20;
+    static final int NUMBER_OF_CORES = 4;
     static FileOutputStream logStream = null;
     static StatusWindow statusWindow = null;
     static TunnelController controller = null;
+    static int corePoolSize = 10;
+    static int maximumPoolSize = 100;
+    static long keepAliveTime = 1;
+    static TimeUnit keepAliveTimeUnit = TimeUnit.MINUTES;
+    static volatile BlockingQueue<Runnable> workQueue = new PriorityBlockingQueue<>();
+    static ThreadPoolExecutor executor = new ThreadPoolExecutor(corePoolSize, maximumPoolSize, keepAliveTime, keepAliveTimeUnit, workQueue);
 
     // -name <str>          Custom name for the tunnel
     // -maxclients <num>    Maximum number of ports to allocate
@@ -165,74 +177,21 @@ public class Main {
             HttpServer server = HttpServer.create(new InetSocketAddress(port), 4);
             server.createContext("/request", controller);
             server.createContext("/status", controller);
-            server.createContext("/server-status", controller);
-            server.createContext("/configuration", controller);
-            server.createContext("/login", controller);
+            server.createContext("/ui", controller);
             if (maintpw != null) {
                 server.createContext("/maintenance/" + maintpw, controller);
             }
-            server.setExecutor(null);
+            server.setExecutor(executor);
             server.start();
 
-            new Thread(controller).start();
-
-            ByteBuffer buf = ByteBuffer.allocate(4096);
+            executor.execute(controller);
 
             while (running) {
                 if (selector.select() > 0) {
-
                     long now = System.currentTimeMillis();
-
-                    for (Iterator<SelectionKey> i = selector.selectedKeys().iterator(); i.hasNext();) {
-                        SelectionKey k = i.next();
-                        DatagramChannel chan = (DatagramChannel)k.channel();
-
-                        try {
-                            buf.clear();
-                            InetSocketAddress from = (InetSocketAddress)chan.receive(buf);
-                            buf.flip();
-
-                            short hdrFrom = buf.getShort();
-                            short hdrTo = buf.getShort();
-
-                            buf.rewind();
-
-                            Client clientFrom = controller.getClient(hdrFrom);
-                            Client clientTo = controller.getClient(hdrTo);
-
-                            if (clientFrom != null) {
-                                if (clientFrom.getAddress() == null) {
-                                    clientFrom.setAddress(from);
-                                } else {
-                                    // don't allow faking client id
-                                    if (!from.getAddress().equals(clientFrom.getAddress().getAddress()))
-                                        clientFrom = null;
-                                }
-                            }
-
-                            if (clientFrom == null || clientTo == null || hdrFrom == hdrTo || !clientTo.isKnownClient(clientFrom.getId())) {
-                                Main.log("Ignoring packet from " + hdrFrom + " to " + hdrTo + " (" + from + "), was " + buf.limit() + " bytes");
-                            } else {
-                                clientFrom.setLastPacket(now);
-
-                                if (clientTo.getAddress() != null) {
-                                    chan.send(buf, clientTo.getAddress());
-                                }
-                            }
-                        } catch (IOException e) {
-                            Main.log("IOException when handling event: " + e.getMessage());
-                        } catch (BufferUnderflowException e) {
-                            Main.log("BufferUnderflowException when handling event: " + e.getMessage());
-                        } catch (BufferOverflowException e) {
-                            Main.log("BufferOverflowException when handling event: " + e.getMessage());
-                        }
-
-                        if (!k.channel().isOpen()) {
-                            k.cancel();
-                        }
-
-                        i.remove();
-                    }
+                    ForkJoinPool pool = new ForkJoinPool(NUMBER_OF_CORES);
+                    pool.submit(() -> selector.selectedKeys().parallelStream().forEach(selectionKey -> processSelectionKey(selectionKey, now)));
+                    clearSelectedKeys(selector.selectedKeys().iterator());
                 }
             }
 
@@ -240,6 +199,62 @@ public class Main {
             Main.log(e.toString());
             e.printStackTrace();
             System.exit(1);
+        }
+    }
+
+    public static void clearSelectedKeys(Iterator<SelectionKey> iterator) {
+        while (iterator.hasNext()) {
+            iterator.next();
+            iterator.remove();
+        }
+    }
+
+    public static void processSelectionKey(SelectionKey selectionKey, long now) {
+        ByteBuffer buf = ByteBuffer.allocate(4096);
+        DatagramChannel chan = (DatagramChannel) selectionKey.channel();
+
+        try {
+            buf.clear();
+            InetSocketAddress from = (InetSocketAddress)chan.receive(buf);
+            buf.flip();
+
+            short hdrFrom = buf.getShort();
+            short hdrTo = buf.getShort();
+
+            buf.rewind();
+
+            Client clientFrom = controller.getClient(hdrFrom);
+            Client clientTo = controller.getClient(hdrTo);
+
+            if (clientFrom != null) {
+                if (clientFrom.getAddress() == null) {
+                    clientFrom.setAddress(from);
+                } else {
+                    // don't allow faking client id
+                    if (!from.getAddress().equals(clientFrom.getAddress().getAddress()))
+                        clientFrom = null;
+                }
+            }
+
+            if (clientFrom == null || clientTo == null || hdrFrom == hdrTo || !clientTo.isKnownClient(clientFrom.getId())) {
+                Main.log("Ignoring packet from " + hdrFrom + " to " + hdrTo + " (" + from + "), was " + buf.limit() + " bytes");
+            } else {
+                clientFrom.setLastPacket(now);
+
+                if (clientTo.getAddress() != null) {
+                    chan.send(buf, clientTo.getAddress());
+                }
+            }
+        } catch (IOException e) {
+            Main.log("IOException when handling event: " + e.getMessage());
+        } catch (BufferUnderflowException e) {
+            Main.log("BufferUnderflowException when handling event: " + e.getMessage());
+        } catch (BufferOverflowException e) {
+            Main.log("BufferOverflowException when handling event: " + e.getMessage());
+        }
+
+        if (!selectionKey.channel().isOpen()) {
+            selectionKey.cancel();
         }
     }
 
@@ -259,7 +274,6 @@ public class Main {
                 } catch (IOException ignore) {}
             }
 
-            lastLogLines.add(out);
         }
     }
 
@@ -269,10 +283,14 @@ public class Main {
         }
     }
 
-    public static List<String> getLastLogLines() {
-        if (lastLogLines == null) {
+    public static List<String> getLastLogLines() throws IOException {
+        if (logfile == null) {
             return new ArrayList<>();
         }
-        return new ArrayList<>(lastLogLines);
+        List<String> lines = FileUtils.readLines(new File(logfile), StandardCharsets.UTF_8);
+        if (lines.size() > 0 && lines.size() > MAX_LOG_LINES_TO_SHOW) {
+            return lines.subList(lines.size() - MAX_LOG_LINES_TO_SHOW, lines.size());
+        }
+        return lines;
     }
 }
